@@ -241,15 +241,16 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
 
   // Public read endpoint: an applicant can check their own review status
   // without an admin signature. Deliberately returns only the review
-  // outcome and timestamps — never the contact details or description
-  // submitted with the application, since anyone who knows (or guesses) an
-  // address could otherwise read them.
+  // outcome, timestamps, and (after review) the review note — never contact
+  // details or the description submitted with the application, since anyone
+  // who knows (or guesses) an address could otherwise read them.
   /**
    * Returns the latest application status without exposing submitted details.
    * @route GET /v1/ngo-applications/status
    * @query ownerAddress Stellar public key
    * @auth Public
-   * @returns 200 `{ status, createdAt, updatedAt }`; 400 invalid address; 404 `{ error: "not_found" }`.
+   * @returns 200 `{ status, createdAt, updatedAt, reviewNote? }`; the note
+   * is returned after review. 400 invalid address; 404 `{ error: "not_found" }`.
    */
   app.get(
     '/ngo-applications/status',
@@ -257,7 +258,8 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
       schema: {
         tags: ['NGOs'],
         summary: 'Check an NGO application status',
-        description: 'Returns only the status and timestamps for the supplied owner address.',
+        description:
+          'Returns the status and timestamps, plus the review note after review, for the supplied owner address.',
         querystring: {
           type: 'object',
           properties: { ownerAddress: { type: 'string', pattern: '^G[A-Z2-7]{55}$' } },
@@ -280,12 +282,19 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
       const application = await prisma.ngoApplication.findFirst({
         where: { ownerAddress: parsed.data.ownerAddress },
         orderBy: { createdAt: 'desc' },
-        select: { status: true, createdAt: true, updatedAt: true },
+        select: { status: true, createdAt: true, updatedAt: true, reviewNote: true },
       });
       if (!application) {
         return reply.code(404).send({ error: 'not_found' });
       }
 
+      if (application.status === 'PENDING') {
+        return {
+          status: application.status,
+          createdAt: application.createdAt,
+          updatedAt: application.updatedAt,
+        };
+      }
       return application;
     },
   );
@@ -386,6 +395,11 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
     '/ngo-applications/:id/approve',
     { preHandler: requireAdminSignature },
     async (request, reply) => {
+      const reviewedBy = request.headers['x-admin-address'];
+      if (typeof reviewedBy !== 'string') {
+        return reply.code(401).send({ error: 'unauthorized' });
+      }
+
       const parsedParams = idParamSchema.safeParse(request.params);
       if (!parsedParams.success) {
         return reply.code(400).send({ error: 'invalid_request' });
@@ -408,7 +422,12 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
       try {
         const reviewed = await prisma.ngoApplication.update({
           where: { id, status: 'PENDING' },
-          data: { status: 'APPROVED', reviewNote: parsed.data?.reviewNote },
+          data: {
+            status: 'APPROVED',
+            reviewNote: parsed.data?.reviewNote,
+            reviewedBy,
+            reviewedAt: new Date(),
+          },
         });
         await notify({
           type: 'application_reviewed',
@@ -443,6 +462,11 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
     '/ngo-applications/:id/reject',
     { preHandler: requireAdminSignature },
     async (request, reply) => {
+      const reviewedBy = request.headers['x-admin-address'];
+      if (typeof reviewedBy !== 'string') {
+        return reply.code(401).send({ error: 'unauthorized' });
+      }
+
       const parsedParams = idParamSchema.safeParse(request.params);
       if (!parsedParams.success) {
         return reply.code(400).send({ error: 'invalid_request' });
@@ -465,7 +489,12 @@ export async function ngoApplicationRoutes(app: FastifyInstance): Promise<void> 
       try {
         const reviewed = await prisma.ngoApplication.update({
           where: { id, status: 'PENDING' },
-          data: { status: 'REJECTED', reviewNote: parsed.data?.reviewNote },
+          data: {
+            status: 'REJECTED',
+            reviewNote: parsed.data?.reviewNote,
+            reviewedBy,
+            reviewedAt: new Date(),
+          },
         });
         await notify({
           type: 'application_reviewed',

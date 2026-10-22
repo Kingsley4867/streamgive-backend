@@ -34,6 +34,8 @@ model Ngo {
   updatedAt    DateTime @updatedAt @map("updated_at")
   streams      Stream[]
 
+  @@index([createdAt])
+  @@index([verified])
   @@map("ngos")
 }
 
@@ -67,6 +69,10 @@ model Stream {
 
   @@index([donorId])
   @@index([ngoId])
+  @@index([createdAt])
+  @@index([status])
+  @@index([tokenAddress])
+  @@index([ngoId, createdAt])
   @@map("streams")
 }
 
@@ -76,7 +82,7 @@ enum NgoApplicationStatus {
   REJECTED
 }
 
-/// Off-chain intake for prospective NGOs, reviewed by admins (next commit)
+/// Off-chain intake for prospective NGOs, reviewed by admins
 /// before anyone goes and calls the on-chain `approve_ngo`. Deliberately
 /// separate from `Ngo.verified`: this tracks the review workflow, while
 /// `Ngo.verified` stays sourced only from the contract's `approved` event
@@ -92,11 +98,14 @@ model NgoApplication {
   country      String?
   status       NgoApplicationStatus @default(PENDING)
   reviewNote   String?              @map("review_note")
+  reviewedBy   String?              @map("reviewed_by")
+  reviewedAt   DateTime?            @map("reviewed_at")
   createdAt    DateTime             @default(now()) @map("created_at")
   updatedAt    DateTime             @updatedAt @map("updated_at")
 
   @@index([ownerAddress])
   @@index([status])
+  @@index([createdAt])
   @@map("ngo_applications")
 }
 
@@ -184,6 +193,7 @@ model StreamEvent {
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([streamId])
+  @@index([streamId, createdAt])
   @@index([type])
   @@index([ledger])
   @@map("stream_events")

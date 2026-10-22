@@ -249,7 +249,7 @@ describe('GET /v1/ngo-applications/status', () => {
     await resetDb();
   });
 
-  it('returns only status and timestamps for the latest application', async () => {
+  it('returns the review note for the latest reviewed application without exposing submitted details', async () => {
     const app = buildServer();
     const ownerAddress = fakeAddress('S');
 
@@ -257,7 +257,11 @@ describe('GET /v1/ngo-applications/status', () => {
       data: validApplicationPayload({ ownerAddress, status: 'REJECTED' }),
     });
     const latest = await prisma.ngoApplication.create({
-      data: validApplicationPayload({ ownerAddress, status: 'APPROVED' }),
+      data: validApplicationPayload({
+        ownerAddress,
+        status: 'REJECTED',
+        reviewNote: 'Please provide registration documents.',
+      }),
     });
 
     const response = await app.inject({
@@ -267,11 +271,12 @@ describe('GET /v1/ngo-applications/status', () => {
 
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.status).toBe('APPROVED');
+    expect(body.status).toBe('REJECTED');
     expect(body.createdAt).toBe(latest.createdAt.toISOString());
     expect(body.updatedAt).toBe(latest.updatedAt.toISOString());
+    expect(body.reviewNote).toBe('Please provide registration documents.');
     // No contact details or other application fields leak out.
-    expect(Object.keys(body).sort()).toEqual(['createdAt', 'status', 'updatedAt']);
+    expect(Object.keys(body).sort()).toEqual(['createdAt', 'reviewNote', 'status', 'updatedAt']);
 
     await app.close();
   });
@@ -432,9 +437,13 @@ describe('admin NGO application review', () => {
     const response = await app.inject({ method: 'POST', url, headers, payload: {} });
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe('APPROVED');
+    expect(response.json().reviewedBy).toBe(adminKeypair.publicKey());
+    expect(response.json().reviewedAt).toBeTypeOf('string');
 
     const stored = await prisma.ngoApplication.findUnique({ where: { id: application.id } });
     expect(stored?.status).toBe('APPROVED');
+    expect(stored?.reviewedBy).toBe(adminKeypair.publicKey());
+    expect(stored?.reviewedAt).toBeInstanceOf(Date);
     expect(notify).toHaveBeenCalledWith({
       type: 'application_reviewed',
       applicationId: application.id,
@@ -460,6 +469,8 @@ describe('admin NGO application review', () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().status).toBe('REJECTED');
+    expect(response.json().reviewedBy).toBe(adminKeypair.publicKey());
+    expect(response.json().reviewedAt).toBeTypeOf('string');
     expect(notify).toHaveBeenCalledWith({
       type: 'application_reviewed',
       applicationId: application.id,
